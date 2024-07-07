@@ -1,0 +1,401 @@
+---
+title: "Predicting Basket Player Career Longevity"
+author: "Giorgio Boi"
+format: html
+editor: visual
+---
+
+# Introduction
+
+The following report focuses on a sports context, specifically analyzing a dataset that presents various statistics regarding the performance of some basketball players. This study can be useful for basketball team managers, especially in choosing players to invest in to have a long-lived team. Speaking of longevity, the purpose of this report is to predict which players are characterized by a career that lasts at least 5 years. Statistically speaking, the goal is to predict the chances that a player has of maintaining a professional career for at least 5 years. This can lead to several benefits since players with more years in their careers tend to give consistent productivity and reliability. They can also provide valuable mentorship and leadership to younger teammates, helping to develop the next generation of players. Finally, retaining players with longer careers can be more cost-effective for teams in the long run, as they do not have to constantly replace players and rebuild chemistry. The dataset has 1340 observations and 21 variables, of which only one is qualitative and corresponding to the player's name. The remainder focus more on various game statistics such as games played, points scored, rebounds, assists, steals, blocks and so on. These are summarized over the players' careers rather than a specific season. The variable of interest is represented by the variable named "Target" and it exclusively takes two values: 0 if the player's career has a duration of less than 5 years and 1 otherwise. For simplicity and convenience, players in the first category will be classified as "rookies" while the remainder will be named as "veterans".
+
+# Building the environment
+
+Before proceeding to analyze the data, we need to load the needed libraries and obviously the dataset. Then missing values are checked and, if present, they will be removed to avoid errors during the model creation process. An important thing to do is encoding the target variable in order to make it compatible with the algorithms that will be used in the report.
+
+```{r}
+rm(list = ls())
+# Load necessary libraries
+library(dplyr)
+library(tidyr)
+library(caret)
+library(glmnet)
+library(randomForest)
+library(rpart)
+library(ggplot2)
+library(rpart.plot)
+library(pROC)
+library(e1071)  # For confusionMatrix function
+
+# Load the data
+data <- read.csv("player_performance.csv")
+
+# Check for missing values
+data = na.omit(data)
+
+# Encode the target variable
+data$Target <- as.factor(data$Target)
+```
+
+Fortunately there were few missing values given of the 1340 records only 11 were removed completely. Below it will be taken a more detailed look at the dataset with the intention of analyzing possible missing values, outliers, and understanding how the variables present distribute and relate.
+
+# EDA
+
+In this section it is possible to get a complete idea of the dataset through the analyses of the variables. To begin with, it will be created a density plot for each variable present (excluding the name and target variable, of course).
+
+```{r}
+data %>%
+  select(GamesPlayed:Turnovers) %>%
+  gather(key, value) %>%
+  ggplot(aes(x = value, fill = key)) + 
+  geom_density(alpha = 0.5) +
+  facet_wrap(~key, scales = 'free_x') +
+  labs(title = "Density Plot of Variables",
+       x = "Value",
+       y = "Density") +
+  theme(legend.position = "none")
+```
+
+In some cases, e.g. Blocks, it can be seen that certain values are more concentrated on a particular area while in other cases, e.g. GamesPlayed, there is a less concentrated and more linear distribution. Since our interest is in career duration, one can divide these distributions by the value of the variable of interest.
+
+Next, one is curious to see the differences between the variables by Target value to see how much difference there is between rookies and veterans.
+
+```{r}
+# Plot box
+data %>%
+  select(Target, GamesPlayed:Turnovers) %>%
+  gather(key, value, -Target) %>%
+  ggplot(aes(x = key, y = value, fill = Target)) +
+  geom_boxplot() +
+  labs(title = "Boxplot of Variables by Target",
+       x = "Variable",
+       y = "Value") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+Two main features can be seen: the first concerns the possible presence of outliers while the second is the difference there is between the statistics of rookie and veteran players. In very few cases it is possible to notice that these two categories of players have a slight difference, in the remainder, we see a predominance of veterans. Returning to the point of outliers, another plot was created that could help to understand how many of these points actually could be considered as such. Compared to the boxplot, there are far fewer points considered as such. The approach chosen to handle them is to not exclude them from the dataset given the dynamic nature of basketball games can have.
+
+The other elements to be analyzed in the dataset are the possible relationships that variables may have with each other. A correlation matrix will be used to better observe this.
+
+```{r}
+# Correlation matrix
+cor_matrix <- cor(data %>% select(GamesPlayed:Turnovers))
+corrplot::corrplot(cor_matrix, method = "circle")
+```
+
+Possible relationships indeed are present, as can be seen from the dark blue color circles. This matrix may be a deciding factor in choosing the mode of preparation to create the models.
+
+Wanting to understand whether the dataset had some sort of fair balance between the newbies and veterans present, the following graph was created. As it shows, the dataset is characterized by a greater presence of the latter.
+
+```{r}
+ggplot(data, aes(x = Target, fill = Target)) + 
+  geom_bar() + 
+  labs(title = "Target Distribution",
+       x = "Target",
+       y = "Count")
+
+```
+
+# Approach
+
+Supervised Learning is the appropriate paradigm for building the models since the nature of the business question implies making predictions based on historical and labeled data. Supervised learning is suitable when there is a clear target variable to predict, in this case, aligns with the need to classify players based on their historical performance metrics. The algorithms applied include Decision Tree, Random Forest and Logistic Regression. Logistic regression is used as a basic framework to compare the results of the other models. Additionally, the logistic regression is implemented two more times but with different variants included. The variants are represented by the regularizations of Ridge and Lasso Regression. These can reduce the variability of the dataset and penalize the least influential variables on the Target variable. The choice of putting both regularizations into the list of models is genuine, willing to compare which could better perform. The Decision Tree is chosen for its simplicity in its interpretation. The model allows one to visualize easily the decisions taken by the algorithm and to identify the most important variables. Generally, it tends to overfit the training data requiring the implementation of another model to solve this problem. For this reason, the Random Forest was chosen. It reduces the overfitting and theoretically improves the accuracy of the predictions. One more reason is its ability to manage the medium-high number of variables, a feature that the dataset has.
+
+# Split Data
+
+Before proceeding with creating these models, there is the need to take into consideration some elements regarding the dataset, including the variables to be involved in the models, the subdivision of the dataset and the eventual transformation of the values. About the variables, it was decided to remove the names of the players since they are not relevant to the analysis, and some of the variables with a high correlation with several variables due to the possibility of finding redundancy of the information and/or multicollinearity. In more detail, the variables removed are MinutesPlayed, FieldGoalsMade and FieldGoalsAttempt, reaching 16 predictors for our target variable. The subdivision of the dataset was not fair, reaching 70% for training (1158 observations) and the remaining for testing (494 observations). Because of this choice the Cross-validation was not chosen to apply. Regarding the possible transformation of values, it is thought to apply the scale of data when needed. In this case, it is applied exclusively to the logistic regression and its two variants.
+
+```{r}
+# Removing Columns
+data$Name = NULL
+data$MinutesPlayed = NULL
+data$FieldGoalsMade = NULL
+data$FieldGoalsAttempt = NULL
+
+# Split the data
+set.seed(123)
+trainIndex <- createDataPartition(data$Target, p = .7, 
+                                  list = FALSE, 
+                                  times = 1)
+trainData <- data[trainIndex,]
+testData  <- data[-trainIndex,]
+
+# Plot function
+plot_roc <- function(model, testData, title) {
+  pred <- predict(model, testData, type = "prob")
+  roc_obj <- roc(testData$Target, pred[,2])
+  auc_value <- auc(roc_obj)
+  plot.roc(roc_obj, main = paste(title, "\nAUC =", round(auc_value, 3)))
+}
+```
+
+# Models
+
+## Decision Tree
+
+The initial model built is the Decision Tree. The resulting tree presents a modest number of branches and leaves.
+
+```{r}
+# Decision Tree
+tree_model <- rpart(Target ~ ., data = trainData, method = "class")
+tree_pred <- predict(tree_model, testData, type = "class")
+tree_cm <- confusionMatrix(tree_pred, testData$Target)
+cat("Decision Tree Results:\n")
+print(tree_cm)
+
+# Plot the Decision Tree
+rpart.plot(tree_model, main = "Decision Tree", extra = 106, cex=0.6)
+```
+
+The most noticeable thing is that it tends to predict more Class 1, or veterans, with a higher percentage too. By taking a closer look at the prediction made in the tests, it is shown how it assumes, at least half of the time, that a given observation is part of Class 1 when possibly it is not the case. This may be caused by an imbalance of classes, the possible presence of bias in the model, or, as mentioned earlier, by its behavior. To check whether it is indeed a problem derived from the model, it proceeded to construct the Random Forest.
+
+## Random Forest
+
+Following the same procedure but repeated multiple times, the resulting model has differences from the Decision Tree. Given the complexity of showing the random forest visually, the importance of the variables for this model will be seen. The indicator used for this plot is MDA. MDA, or Mean Decrease Accuracy, is the variable that measures the direct impact of a feature on the average accuracy of the model. There is another variable that is similar to it (Mean Decrease Gini), but it is preferred to use MDA since the target variable is only of two classes and it is more predictive.
+
+```{r}
+# Hyperparameter Tuning
+set.seed(1)
+rf_model <- randomForest(Target ~ ., data = trainData,
+                               ntree = 405, mtry = 4, 
+                               importance = TRUE, 
+                               nodesize = 5)
+
+# Model Evaluation
+rf_pred <- predict(rf_model, testData)
+rf_cm <- confusionMatrix(rf_pred, testData$Target)
+cat("Random Forest Results:\n")
+print(rf_cm)
+
+# Plot Variable Importance for Random Forest
+varImpPlot(rf_model, type = 1, main = "Variable Importance in Random Forest")
+```
+
+The most important variable for this model is GamesPlayed as shown by its value of MDA, impacting in a significant way if its values are shuffled. The higher the value of MDA, the higher the influence of that variable. In this case, FreeThrowPercent is the least significant variable for predicting the target variable.
+
+# Scale Data
+
+As mentioned above, the remaining models require the data to be scaled.
+
+```{r}
+# Scale the features
+scaled_data <- data %>% 
+  mutate(across(GamesPlayed:Turnovers, scale))
+
+trainDataScaled <- scaled_data[trainIndex,]
+testDataScaled  <- scaled_data[-trainIndex,]
+```
+
+## Lasso Regression
+
+After the trees, it is the turn to explore the models related to logistic regression. Since the unregularized version is used as framework, it will not be seen in more detail giving more space to the regularized versions of it. It started from the model with the most punitive regularization, namely Lasso.
+
+```{r}
+# Logistic Regression with Lasso Regularization
+lasso_model <- cv.glmnet(as.matrix(trainDataScaled[, -ncol(trainDataScaled)]), trainDataScaled$Target, family = "binomial", alpha = 1)
+lasso_pred <- predict(lasso_model, s = "lambda.min", newx = as.matrix(testDataScaled[, -ncol(testDataScaled)]), type = "class")
+lasso_pred <- factor(lasso_pred, levels = c(0, 1))
+lasso_cm <- confusionMatrix(lasso_pred, testDataScaled$Target)
+cat("Lasso Regression Results:\n")
+print(lasso_cm)
+
+plot(lasso_model$glmnet.fit, xvar = "lambda", label = TRUE)
+abline(h=0)
+title(main = "Coefficient Path - Lasso Regression", line = 2.5)
+```
+
+One can analyze how much lambda is needed to bring the coefficients toward zero. In the graph, lambda is represented by a logarithmic scale to allow the behavior of the coefficients to be seen accurately. Two of these coefficients require little lambda to reach zero, making it clear how unimportant they are for predicting the target variable and thus have minimal impact on the prediction of the model. Of note, about 7 coefficients require a very high lambda value compared to the others showing how relevant they are.
+
+## Ridge Regression
+
+```{r}
+# Logistic Regression with Ridge Regularization
+ridge_model <- cv.glmnet(as.matrix(trainDataScaled[, -ncol(trainDataScaled)]), trainDataScaled$Target, family = "binomial", alpha = 0)
+ridge_pred <- predict(ridge_model, s = "lambda.min", newx = as.matrix(testDataScaled[, -ncol(testDataScaled)]), type = "class")
+ridge_pred <- factor(ridge_pred, levels = c(0, 1))
+ridge_cm <- confusionMatrix(ridge_pred, testDataScaled$Target)
+cat("Ridge Regression Results:\n")
+print(ridge_cm)
+
+plot(ridge_model$glmnet.fit, xvar = "lambda", label = TRUE)
+abline(h=0)
+title(main = "Coefficient Path - Ridge Regression", line = 2.5)
+```
+
+Ridge Regression has a different approach than Lasso. It does not force any variable to reach zero but, only close to it. Unlike Lasso, which removed the less relevant ones, Ridge will not perform subset selection.
+
+## Logistic Regression
+
+```{r}
+# Logistic Regression for Comparison
+logit_model <- glm(Target ~ ., data = trainDataScaled, family = binomial)
+logit_pred <- predict(logit_model, testDataScaled, type = "response")
+logit_pred_class <- ifelse(logit_pred > 0.5, 1, 0)
+logit_pred_class <- factor(logit_pred_class, levels = c(0, 1))
+logit_cm <- confusionMatrix(logit_pred_class, testDataScaled$Target)
+cat("Logistic Regression Results:\n")
+print(logit_cm)
+```
+
+# Assessment & Comparisons
+
+In the previous sections, it was seen how predictors were evaluated without analyzing how the performance of the models was. In this section, it will be assessed each of them to understand how reliable they are. To evaluate the performance of the models, the ROC Curve will be used since the analysis is based on a binary variable. To make comparisons between models instead, the confusion matrix containing the following parameters will be used: Accuracy, Sensitivity, Specificity, Precision, and F1_Score. The accuracy represents the proportion of all correct predictions, the sensitivity measures the ability of the model to identify positive cases, the specificity identifies the negative cases, the precision calculates the proportion of correct positive predictions and finally, the F1_Score is a balanced measure that considers precision and sensitivity. The next graph shows the different ROC Curves with the AUC (Area Under Curve) noted on the title of each curve, and it simply represents the area below the curve. A good ROC Curve would be located in the top-left corner of the graph. This translates to being very close to AUC equaling 1.
+
+```{r}
+# Plot ROC and Calculate AUC for Each Model
+par(mfrow = c(2, 3))
+
+# ROC for Logistic Regression
+roc_obj <- roc(testData$Target, as.numeric(logit_pred))
+auc_value <- auc(roc_obj)
+plot.roc(roc_obj, main = paste("ROC Curve for Logistic Regression\nAUC =", round(auc_value, 3)))
+
+# ROC for Ridge Regression
+ridge_pred_prob <- predict(ridge_model, s = "lambda.min", newx = as.matrix(testData[, -ncol(testData)]), type = "response")
+roc_obj <- roc(testData$Target, as.numeric(ridge_pred_prob))
+auc_value <- auc(roc_obj)
+plot.roc(roc_obj, main = paste("ROC Curve for Ridge Regression\nAUC =", round(auc_value, 3)))
+
+# ROC for Lasso Regression
+lasso_pred_prob <- predict(lasso_model, s = "lambda.min", newx = as.matrix(testData[, -ncol(testData)]), type = "response")
+roc_obj <- roc(testData$Target, as.numeric(lasso_pred_prob))
+auc_value <- auc(roc_obj)
+plot.roc(roc_obj, main = paste("ROC Curve for Lasso Regression\nAUC =", round(auc_value, 3)))
+
+# ROC for Decision Tree
+tree_pred_prob <- predict(tree_model, testData, type = "prob")[, 2]
+roc_obj <- roc(testData$Target, as.numeric(tree_pred_prob))
+auc_value <- auc(roc_obj)
+plot.roc(roc_obj, main = paste("ROC Curve for Decision Tree\nAUC =", round(auc_value, 3)))
+
+# ROC for Random Forest
+rf_pred_prob <- predict(rf_model, testData, type = "prob")[, 2]
+roc_obj <- roc(testData$Target, as.numeric(rf_pred_prob))
+auc_value <- auc(roc_obj)
+plot.roc(roc_obj, main = paste("ROC Curve for Random Forest\nAUC =", round(auc_value, 3)))
+```
+
+The results obtained from these curves alone do not demonstrate good model performance. To be completely certain that we have a solid model, the confusion matrix needs to be analyzed.
+
+```{r}
+# Model Comparison
+results <- data.frame(
+  Model = c("Decision Tree", "Random Forest", "Lasso Regression", "Ridge Regression", "Logistic Regression"),
+  Accuracy = c(tree_cm$overall['Accuracy'], rf_cm$overall['Accuracy'], lasso_cm$overall['Accuracy'], ridge_cm$overall['Accuracy'], logit_cm$overall['Accuracy']),
+  Sensitivity = c(tree_cm$byClass['Sensitivity'], rf_cm$byClass['Sensitivity'], lasso_cm$byClass['Sensitivity'], ridge_cm$byClass['Sensitivity'], logit_cm$byClass['Sensitivity']),
+  Specificity = c(tree_cm$byClass['Specificity'], rf_cm$byClass['Specificity'], lasso_cm$byClass['Specificity'], ridge_cm$byClass['Specificity'], logit_cm$byClass['Specificity']),
+  Precision = c(tree_cm$byClass['Pos Pred Value'], rf_cm$byClass['Pos Pred Value'], lasso_cm$byClass['Pos Pred Value'], ridge_cm$byClass['Pos Pred Value'], logit_cm$byClass['Pos Pred Value']),
+  F1_Score = c(tree_cm$byClass['F1'], rf_cm$byClass['F1'], lasso_cm$byClass['F1'], ridge_cm$byClass['F1'], logit_cm$byClass['F1'])
+)
+
+cat("Model Comparison:\n")
+print(results)
+```
+
+From the confusion matrix, it is possible to gain some insights. The Ridge Regression seems to be the best model due to its higher accuracy and precision with a good balance in the other metrics. Logistic regression also performs well, albeit slightly less than Ridge. One thing that may be surprising is the performance of Random Forest, which failed to outperform Decision Tree except for sensitivity.
+
+# Upgrade
+
+Not being satisfied with Random Forest, it was decided to find a solution that could improve it. As mentioned earlier during the Decision Tree exhibit, a possible cause of the model tending to predict class 1 more may correspond to an imbalance in the dataset. One of the possible solutions in this regard is to exploit oversampling. Oversampling is a technique used to increase the observations of a dataset by adding samples based on data already present. In this case, the dataset has only 323 observations related to class 0 and 826 to the other class.
+
+```{r}
+# Seleziona i campioni della classe minoritaria
+minority_class_data <- data[data$Target == 0, ]
+
+# Ripeti casualmente i campioni della classe minoritaria fino a raggiungere il numero di campioni della classe maggioritaria
+oversampled_minority_class_data <- minority_class_data[sample(nrow(minority_class_data), sum(data$Target == 1), replace = TRUE), ]
+
+# Combina i campioni della classe maggioritaria con i campioni oversampled della classe minoritaria
+oversampled_data <- rbind(data[data$Target == 1, ], oversampled_minority_class_data)
+
+# Controlla la distribuzione delle classi nel dataset oversampled
+table(oversampled_data$Target)
+```
+
+In order to have a balance between the two classes, 503 observations were added for class 0. After that, the same procedure as before was repeated to create the Random Forest.
+
+```{r}
+# Suddividi il dataset in training e test set
+set.seed(123) # Imposta un seed per la riproducibilità
+trainIndex <- createDataPartition(oversampled_data$Target, p = .7, list = FALSE, times = 1)
+trainData <- oversampled_data[trainIndex, ]
+testData <- oversampled_data[-trainIndex, ]
+```
+
+## Random Forest
+
+From the graph below it is already possible to see how this new Random Forest differs from the old one.
+
+```{r}
+# Hyperparameter Tuning
+set.seed(1)
+rf_model2 <- randomForest(Target ~ ., data = trainData,
+                               ntree = 405, mtry = 4, 
+                               importance = TRUE, 
+                               nodesize = 5)
+
+# Model Evaluation
+rf_pred2 <- predict(rf_model, testData)
+rf_cm2 <- confusionMatrix(rf_pred2, testData$Target)
+cat("Random Forest Results:\n")
+print(rf_cm2)
+
+# Plot Variable Importance for Random Forest
+varImpPlot(rf_model2, type = 1, main = "Variable Importance in Random Forest")
+```
+
+The first two variables were confirmed as the two most important variables while the remaining ones changed slightly. This suggests that adding these samples of observations may have helped the model discover patterns that it could not do before.
+
+# Final Comparization
+
+For more confirmation, the new ROC Curve and the confusion matrix will be analyzed.
+
+```{r}
+# Plot ROC and Calculate AUC for Each Model
+par(mfrow = c(1, 1))
+
+# ROC for Random Forest
+rf_pred_prob2 <- predict(rf_model2, testData, type = "prob")[, 2]
+roc_obj2 <- roc(testData$Target, as.numeric(rf_pred_prob2))
+auc_value2 <- auc(roc_obj2)
+plot.roc(roc_obj2, main = paste("ROC Curve for Random Forest\nAUC =", round(auc_value2, 3)))
+```
+
+The new curve shows that it is pointing more toward the top-left corner of the graph than the old curve and the AUC value has increased by 0.15 bringing a not bad result. However, the confusion matrix is still missing to be analyzed. For convenience, the confusion matrix from before will be rewritten and the metrics of this new Random Forest will be added. In this way, the actual improvements can be seen, and whether to confirm or change the selection of the best model created.
+
+```{r}
+# Model Comparison
+results <- data.frame(
+  Model = c("Decision Tree", "Random Forest (Prima)", "Lasso Regression", "Ridge Regression", "Logistic Regression", "Random Forest (Dopo)"),
+  Accuracy = c(tree_cm$overall['Accuracy'], rf_cm$overall['Accuracy'], lasso_cm$overall['Accuracy'], ridge_cm$overall['Accuracy'], logit_cm$overall['Accuracy'], rf_cm2$overall['Accuracy']),
+  Sensitivity = c(tree_cm$byClass['Sensitivity'], rf_cm$byClass['Sensitivity'], lasso_cm$byClass['Sensitivity'], ridge_cm$byClass['Sensitivity'], logit_cm$byClass['Sensitivity'], rf_cm2$byClass['Sensitivity']),
+  Specificity = c(tree_cm$byClass['Specificity'], rf_cm$byClass['Specificity'], lasso_cm$byClass['Specificity'], ridge_cm$byClass['Specificity'], logit_cm$byClass['Specificity'], rf_cm2$byClass['Specificity']),
+  Precision = c(tree_cm$byClass['Pos Pred Value'], rf_cm$byClass['Pos Pred Value'], lasso_cm$byClass['Pos Pred Value'], ridge_cm$byClass['Pos Pred Value'], logit_cm$byClass['Pos Pred Value'], rf_cm2$byClass['Pos Pred Value']),
+  F1_Score = c(tree_cm$byClass['F1'], rf_cm$byClass['F1'], lasso_cm$byClass['F1'], ridge_cm$byClass['F1'], logit_cm$byClass['F1'], rf_cm2$byClass['F1'])
+)
+
+cat("Model Comparison:\n")
+print(results)
+```
+
+# Conclusion
+
+The Random Forest model not only surpassed the Decision Tree, but it scored impressive quantum progression in all parameters such that it was confirmed to be the best model, having outperformed the previously leading model of Ridge Regression. Returning to the context of a basketball team, it is practicable to leverage this model to confidently predict which players are likely to have a career of at least 5 years. This permits one to make data-driven decisions in talent management and resource allocation. Key player attributes identified by the model as critical to career longevity can help adjust our training programs to focus on these areas, thereby improving player development. By doing so, it is insurable that a manager can build a team with sustained performance and longevity. In the future, updating the model with new data will be essential to maintain its accuracy and relevance.
+
+# Reference List
+
+**Dataset**
+
+• www.kaggle.com. (n.d.). Performance Prediction. \[online\] Available at: <https://www.kaggle.com/datasets/sachinsharma1123/performance-prediction/data>.
+
+**External Information**
+
+• Google Cloud. (n.d.). What is Supervised Learning? \[online\] Available at: <https://cloud.google.com/discover/what-is-supervised-learning>.\
+• Research, O. and Vretaros, A. (n.d.). OPEN ACESS Advances in Health and Exercise Comparing the career longevity of basketball players across three continents: A preliminary exploratory study. *Adv Health Exerc*, \[online\] 2(1), pp.1–7. Available at: <https://www.turkishkinesiology.com/index.php/ahe/article/download/14/13.>\
+• IBM (2023). What is a Decision Tree \| IBM. \[online\] www.ibm.com. Available at: <https://www.ibm.com/topics/decision-trees>.\
+• Donges, N. (2021). Random Forest: a Complete Guide for Machine Learning. \[online\] Built in. Available at: <https://builtin.com/data-science/random-forest-algorithm>.\
+• Kumar, D. (2020). What is LASSO Regression Definition, Examples and Techniques. \[online\] GreatLearning. Available at: <https://www.mygreatlearning.com/blog/understanding-of-lasso-regression/>.\
+• www.andreaprovino.it. (2019). Ridge Regression. \[online\] Available at: <https://www.andreaprovino.it/ridge-regression>.\
+• GeeksforGeeks. (2020). AUC-ROC Curve. \[online\] Available at: <https://www.geeksforgeeks.org/auc-roc-curve/>.\
+• Narkhede, S. (2018). Understanding Confusion Matrix. \[online\] Medium. Available at: <https://towardsdatascience.com/understanding-confusion-matrix-a9ad42dcfd62>.\
+• Editor (2022). Alcuni modi per gestire dati sbilanciati nel machine learning. \[online\] NetAi. Available at: <https://netai.it/alcuni-modi-per-gestire-dati-sbilanciati-nel-machine-learning/#page-content>.\
+• Martinez-Taboada, Fernando; Redondo, Jose Ignacio (2020). Variable importance plot (mean decrease accuracy and mean decrease Gini).. PLOS ONE. Figure. <https://doi.org/10.1371/journal.pone.0230799.g002>
