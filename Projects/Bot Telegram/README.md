@@ -14,7 +14,7 @@ The following project aims to replicate the idea of a dungeon RPG game via a Tel
 ## Installation
 1. Clone the repository:
     ```bash
-    git clone https://github.com/tuo-username/telegram-bot.git
+    git clone https://github.com/Spiedoz/Portfolio/tree/main/Projects/Bot%20Telegram
     cd telegram-bot
     ```
 2. Install the dependencies:
