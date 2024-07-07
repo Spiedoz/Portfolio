@@ -2,7 +2,7 @@
 
 ## Introduction
 
-The following project aims to replicate the idea of a dungeon RPG game via a Telegram bot. At the moment it could be said that the game is not complete, given the lack of some features that these games can present. However, it can be considered as a beta and starting base for adding new features. The project is written in Python and primarily uses the `python-telegram-bot` library (version 21.3). Regarding saving the actions done by users, two databases were chosen:
+The following project aims to replicate the idea of a dungeon RPG game via a Telegram bot. At the moment it could be said that the game is not complete, given the lack of some features that these games can present. However, it can be considered as a beta and starting base for adding new features. The project is written in Python and primarily uses the `python-telegram-bot` library. Regarding saving the actions done by users, two databases were chosen:
 
 - `dungeon.db`: where various user data is stored.
 - `asset.db`: where information about classes, objects (of any category), and monsters is kept in storage.
