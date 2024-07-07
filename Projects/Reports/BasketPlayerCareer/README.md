@@ -34,7 +34,7 @@ For more information about the dataset, check the link: https://www.kaggle.com/d
 ## File Structure
 - `BasketPlayerCareer.qmd`: Quarto document containing the full analysis, including R code and visualizations.
 - `player_performance.csv`: CSV file containing records about the players.
-- `player_performance.html`: HTML file to show the graphs of the report 
+- `player_performance.html`: HTML file to show Quarto document rendered.
 
 ## Requirements
 - R (version 4.3.2. or higher)
