@@ -73,8 +73,14 @@ The bot handles autonomously:
 
 Below are some pictures to make the idea of the bot even clearer:
 
-![Example of welcome message]()
-![Example of help command](images/)
+**Registration**
+![Example of welcome message](images/registration.png)
+
+**Exploring**
+![Example of exploring](images/engaging%20monster.png)
+
+**Dueling Monsters**
+![Example of dueling](images/dueling.png)
 
 ## Extra Information
 
